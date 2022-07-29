@@ -9,8 +9,9 @@
 
 // http response callback
 typedef void OnRspCallback(mg_connection *c, std::string);
+
 // http request handler
-using ReqHandler = std::function<bool (std::string, std::string, mg_connection *c, OnRspCallback)>;
+using ReqHandler = std::function<bool(std::string, std::string, mg_connection *c, OnRspCallback)>;
 
 class HttpServer
 {
@@ -34,7 +35,7 @@ private:
 	static void SendHttpRsp(mg_connection *connection, std::string rsp);
 
 	static int isWebsocket(const mg_connection *connection);
-	static void HandleWebsocketMessage(mg_connection *connection, int event_type, websocket_message *ws_msg); 
+	static void HandleWebsocketMessage(mg_connection *connection, int event_type, websocket_message *ws_msg);
 	static void SendWebsocketMsg(mg_connection *connection, std::string msg);
 	static void BroadcastWebsocketMsg(std::string msg);
 	static std::unordered_set<mg_connection *> s_websocket_session_set;
@@ -42,4 +43,3 @@ private:
 	std::string m_port;
 	mg_mgr m_mgr;
 };
-
