@@ -1,204 +1,280 @@
-#include <utility>
 #include "http_server.h"
+#include <utility>
+#include "liboauth/liboauthcpp.h"
 
-void HttpServer::Init(const std::string &port)
-{
-	m_port = port;
-	s_server_option.enable_directory_listing = "yes";
-	s_server_option.document_root = s_web_dir.c_str();
+// twitter verification
+const std::string consumer_key =
+    "PnnNWAreKdAaC2IWceAV6CtMD";  // Key from Twitter
+const std::string consumer_secret =
+    "I3gk364fwbf6uCGCqfvUlfImjFJCiBnxOR62TomxTgTpHyL8an";  // Secret from
+                                                           // Twitter
+const std::string request_token_url =
+    "https://api.twitter.com/oauth/request_token";
+const std::string request_token_query_args = "oauth_callback=oob";
+const std::string authorize_url = "https://api.twitter.com/oauth/authorize";
+const std::string access_token_url =
+    "https://api.twitter.com/oauth/access_token";
 
-	// other http configs
+std::string oAuthQuery;
+std::string authRedirect;
+std::string authRedirect2;  // for oauth token
 
-	// enable CORS
-	// s_server_option.extra_headers = "Access-Control-Allow-Origin: *";
+std::string requestTokenKey;
+std::string requestTokenSecret;
+
+static OAuth::Consumer *authConsumer;
+static OAuth::Client *oauthClient;
+
+static const char *oAuthPostData = NULL;  // POST data
+
+static const uint64_t s_timeout_ms = 1500;  // Connect timeout in milliseconds
+
+void HttpServer::Init(const std::string &addr) {
+  m_addr = addr;
+
+  opts = {0, 0, 0, 0, 0, 0};
+  opts.root_dir = ".";
+
+  OAuth::Consumer *consumer =
+      new OAuth::Consumer(consumer_key, consumer_secret);
+  authConsumer = consumer;
+  OAuth::Client *oauth = new OAuth::Client(consumer);
+  oauthClient = oauth;
 }
 
-bool HttpServer::Start()
-{
-	mg_mgr_init(&m_mgr, NULL);
-	mg_connection *connection = mg_bind(&m_mgr, m_port.c_str(), HttpServer::OnHttpWebsocketEvent);
-	if (connection == NULL)
-		return false;
-	// for both http and websocket
-	mg_set_protocol_http_websocket(connection);
+bool HttpServer::Start(const std::string &log_level) {
+  mg_log_set(log_level.c_str());
+  mg_mgr_init(&m_mgr);
+  // for https
+  mg_connection *connection = mg_http_listen(
+      &m_mgr, m_addr.c_str(), HttpServer::HandleHttpEvent, (void *) 1);
+  if (connection == NULL) {
+    exit(EXIT_FAILURE);
+  }
 
-	printf("starting http server at port: %s\n", m_port.c_str());
-	// loop
-	while (true)
-	{
-		mg_mgr_poll(&m_mgr, 500); // ms
-	}
-
-	return true;
+  for (;;) mg_mgr_poll(&m_mgr, 500);  // Infinite event loop
+  mg_mgr_free(&m_mgr);
+  return 0;
 }
 
-void HttpServer::OnHttpWebsocketEvent(mg_connection *connection, int event_type, void *event_data)
-{
-	// 区分http和websocket
-	if (event_type == MG_EV_HTTP_REQUEST)
-	{
-		http_message *http_req = (http_message *)event_data;
-		HandleHttpEvent(connection, http_req);
-	}
-	else if (event_type == MG_EV_WEBSOCKET_HANDSHAKE_DONE ||
-			 event_type == MG_EV_WEBSOCKET_FRAME ||
-			 event_type == MG_EV_CLOSE)
-	{
-		websocket_message *ws_message = (struct websocket_message *)event_data;
-		HandleWebsocketMessage(connection, event_type, ws_message);
-	}
+void HttpServer::SendHttpRsp200(mg_connection *connection, std::string rsp) {
+  // send header first, not support HTTP/2.0
+  mg_printf(connection, "%s",
+            "HTTP/1.1 200 OK\r\nTransfer-Encoding: chunked\r\n\r\n");
+  mg_http_printf_chunk(connection, "{ \"result\": %s }", rsp.c_str());
+  // close
+  mg_http_printf_chunk(connection, "");
 }
 
-// ---- simple http ---- //
-static bool route_check(http_message *http_msg, const char *route_prefix)
-{
-	if (mg_vcmp(&http_msg->uri, route_prefix) == 0)
-		return true;
-	else
-		return false;
+void HttpServer::SendHttpRsp301(mg_connection *connection,
+                                std::string location) {
+  // send header first, not support HTTP/2.0
+  mg_printf(connection,
+            "HTTP/1.1 301 Moved\r\n"
+            "Location: %s/\r\n"
+            "Content-Length: 0\r\n"
+            "\r\n",
+            location.c_str());
 
-	// TODO:
-	// mg_vcmp(&http_msg->method, "GET");
-	// mg_vcmp(&http_msg->method, "POST");
-	// mg_vcmp(&http_msg->method, "PUT");
-	// mg_vcmp(&http_msg->method, "DELETE");
+  // close
+  mg_http_printf_chunk(connection, "");
 }
 
-void HttpServer::AddHandler(const std::string &url, ReqHandler req_handler)
-{
-	if (s_handler_map.find(url) != s_handler_map.end())
-		return;
+void HttpServer::HandleHttpEvent(struct mg_connection *connection, int ev,
+                                 void *ev_data, void *fn_data) {
+  if (ev == MG_EV_ACCEPT && fn_data != NULL) {
+    struct mg_tls_opts opts = {
+        //.ca = "ca.pem",           // Uncomment to enable two-way SSL
+        .cert = "server.pem",     // Certificate PEM file
+        .certkey = "server.pem",  // This pem contains both cert and key
+    };
+    mg_tls_init(connection, &opts);
+  } else if (ev == MG_EV_HTTP_MSG) {
+    struct mg_http_message *hm = (struct mg_http_message *) ev_data;
 
-	s_handler_map.insert(std::make_pair(url, req_handler));
+    if (mg_http_match_uri(hm, "/api/checkalive")) {
+      SendHttpRsp200(connection, "\"alive\"");
+    } else if (mg_http_match_uri(hm, "/api/twitter/auth")) {
+      printf("start twitter verification\n");
+
+      OAuth::Consumer consumer(consumer_key, consumer_secret);
+      OAuth::Client oauth(&consumer);
+
+      authConsumer = &consumer;
+      oauthClient = &oauth;
+
+      std::string base_request_token_url =
+          request_token_url +
+          (request_token_query_args.empty()
+               ? std::string("")
+               : (std::string("?") + request_token_query_args));
+      std::string oAuthQueryParams = oauthClient->getURLQueryString(
+          OAuth::Http::Get, base_request_token_url);
+      oAuthQuery = request_token_url;
+      oAuthQuery = oAuthQuery.append("?").append(oAuthQueryParams);
+      printf("oAuthQuery:%s\n", oAuthQuery.c_str());
+
+      bool done = false;
+      struct mg_mgr t_mgr;
+      mg_mgr_init(&t_mgr);
+      struct mg_connection *c2 = mg_http_connect(&t_mgr, oAuthQuery.c_str(),
+                                                 TwitterHandlerAuth, &done);
+      if (c2 == NULL) {
+        mg_error(connection, "Cannot create client connection");
+      }
+      while (!done) {
+        mg_mgr_poll(&t_mgr, 5000);  // Event manager loops until 'done'
+      }
+      mg_mgr_free(&t_mgr);
+
+      std::string msg = "\"";
+      msg = msg.append(authRedirect).append("\"");
+      SendHttpRsp200(connection, msg);
+    } else if (mg_http_match_uri(hm, "/api/twitter/pin")) {
+      if (authConsumer == NULL) {
+        SendHttpRsp200(connection, "authConsumer is NULL");
+      }
+      if (oauthClient == NULL) {
+        SendHttpRsp200(connection, "oauthClient is NULL");
+      }
+
+      std::string pin(hm->body.ptr, hm->body.len);
+
+      OAuth::Token requestToken(requestTokenKey, requestTokenSecret, pin);
+      printf(
+          "requestToken key:%s, requestToken secret:%s, requestToken pin: %s\n",
+          requestToken.key().c_str(), requestToken.secret().c_str(),
+          requestToken.pin().c_str());
+
+      OAuth::Consumer consumer(consumer_key, consumer_secret);
+      OAuth::Client oauth = OAuth::Client(&consumer, &requestToken);
+      oauthClient = &oauth;
+      std::string oAuthQueryString = oauthClient->getURLQueryString(
+          OAuth::Http::Get, access_token_url, std::string(""), true);
+
+      authRedirect2 = access_token_url;
+      authRedirect2 = authRedirect2.append("?").append(oAuthQueryString);
+      printf("authRedirect2: %s\n", authRedirect2.c_str());
+
+      std::string msg = "\"";
+      msg = msg.append(authRedirect2).append("\"");
+      SendHttpRsp200(connection, msg);
+    } else if (mg_http_match_uri(hm, "/api/twitter/final")) {
+      bool done = false;
+      struct mg_mgr t_mgr;
+      mg_mgr_init(&t_mgr);
+      struct mg_connection *c3 = mg_http_connect(&t_mgr, oAuthQuery.c_str(),
+                                                 TwitterHandlerFinal, &done);
+      if (c3 == NULL) {
+        mg_error(connection, "Cannot create client connection");
+      }
+      while (!done) {
+        mg_mgr_poll(&t_mgr, 5000);  // Event manager loops until 'done'
+      }
+      mg_mgr_free(&t_mgr);
+
+      std::string msg = "\"";
+      SendHttpRsp200(connection, msg.append("\""));
+    } else {
+      struct mg_http_serve_opts opts = {.root_dir = "."};
+      mg_http_serve_dir(connection, hm, &opts);
+    }
+  }
+  (void) fn_data;
 }
 
-void HttpServer::RemoveHandler(const std::string &url)
-{
-	auto it = s_handler_map.find(url);
-	if (it != s_handler_map.end())
-		s_handler_map.erase(it);
+void HttpServer::TwitterHandlerAuth(struct mg_connection *c2, int ev,
+                                    void *ev_data, void *fn_data) {
+  if (ev == MG_EV_OPEN) {
+    *(uint64_t *) c2->label = mg_millis() + s_timeout_ms;
+  } else if (ev == MG_EV_POLL) {
+    if (mg_millis() > *(uint64_t *) c2->label &&
+        (c2->is_connecting || c2->is_resolving)) {
+      mg_error(c2, "Connect timeout");
+    }
+  } else if (ev == MG_EV_CONNECT) {
+    // Connected to server. Extract host name from URL
+    struct mg_str host = mg_url_host(oAuthQuery.c_str());
+
+    // If s_url is https://, tell client connection to use TLS
+    if (mg_url_is_ssl(oAuthQuery.c_str())) {
+      struct mg_tls_opts opts = {.ca = "ca.pem", .srvname = host};
+      mg_tls_init(c2, &opts);
+    }
+
+    // Send request
+    int content_length = oAuthPostData ? strlen(oAuthPostData) : 0;
+    mg_printf(c2,
+              "%s %s HTTP/1.0\r\n"
+              "Host: %.*s\r\n"
+              "Content-Type: octet-stream\r\n"
+              "Content-Length: %d\r\n"
+              "\r\n",
+              oAuthPostData ? "POST" : "GET", mg_url_uri(oAuthQuery.c_str()),
+              (int) host.len, host.ptr, content_length);
+    mg_send(c2, oAuthPostData, content_length);
+  } else if (ev == MG_EV_HTTP_MSG) {
+    struct mg_http_message *hm = (struct mg_http_message *) ev_data;
+    // printf("got data:%.*s\n", (int) hm->message.len, hm->message.ptr);
+
+    std::string request_token_resp(hm->body.ptr, hm->body.len);
+    OAuth::Token request = OAuth::Token::extract(request_token_resp);
+
+    requestTokenKey = request.key();
+    requestTokenSecret = request.secret();
+    authRedirect = authorize_url;
+    authRedirect.append("?oauth_token=").append(requestTokenKey);
+    printf("authorizeURL: %s\n", authRedirect.c_str());
+    c2->is_closing = 1;        // Tell mongoose to close this connection
+    *(bool *) fn_data = true;  // Tell event loop to stop
+  } else if (ev == MG_EV_CLOSE) {
+    c2->is_closing = 1;        // Tell mongoose to close this connection
+    *(bool *) fn_data = true;  // Tell event loop to stop
+  } else if (ev == MG_EV_ERROR) {
+    *(bool *) fn_data = true;  // Error, tell event loop to stop
+  }
 }
 
-void HttpServer::SendHttpRsp(mg_connection *connection, std::string rsp)
-{
-	// --- not eabled CORS
-	// send header first, not support HTTP/2.0
-	mg_printf(connection, "%s", "HTTP/1.1 200 OK\r\nTransfer-Encoding: chunked\r\n\r\n");
-	mg_printf_http_chunk(connection, "{ \"result\": %s }", rsp.c_str());
-	// close
-	mg_send_http_chunk(connection, "", 0);
+void HttpServer::TwitterHandlerFinal(struct mg_connection *c3, int ev,
+                                     void *ev_data, void *fn_data) {
+  if (ev == MG_EV_OPEN) {
+    *(uint64_t *) c3->label = mg_millis() + s_timeout_ms;
+  } else if (ev == MG_EV_POLL) {
+    if (mg_millis() > *(uint64_t *) c3->label &&
+        (c3->is_connecting || c3->is_resolving)) {
+      mg_error(c3, "Connect timeout");
+    }
+  } else if (ev == MG_EV_CONNECT) {
+    // Connected to server. Extract host name from URL
+    struct mg_str host = mg_url_host(oAuthQuery.c_str());
 
-	// --- enable CORS
-	/*mg_printf(connection, "HTTP/1.1 200 OK\r\n"
-			  "Content-Type: text/plain\n"
-			  "Cache-Control: no-cache\n"
-			  "Content-Length: %d\n"
-			  "Access-Control-Allow-Origin: *\n\n"
-			  "%s\n", rsp.length(), rsp.c_str()); */
-}
+    // If s_url is https://, tell client connection to use TLS
+    if (mg_url_is_ssl(oAuthQuery.c_str())) {
+      struct mg_tls_opts opts = {.ca = "ca.pem", .srvname = host};
+      mg_tls_init(c3, &opts);
+    }
 
-void HttpServer::HandleHttpEvent(mg_connection *connection, http_message *http_req)
-{
-	std::string req_str = std::string(http_req->message.p, http_req->message.len);
-	printf("got request: %s\n", req_str.c_str());
+    // Send request
+    int content_length = oAuthPostData ? strlen(oAuthPostData) : 0;
+    mg_printf(c3,
+              "%s %s HTTP/1.0\r\n"
+              "Host: %.*s\r\n"
+              "Content-Type: octet-stream\r\n"
+              "Content-Length: %d\r\n"
+              "\r\n",
+              oAuthPostData ? "POST" : "GET", mg_url_uri(oAuthQuery.c_str()),
+              (int) host.len, host.ptr, content_length);
+    mg_send(c3, oAuthPostData, content_length);
+  } else if (ev == MG_EV_HTTP_MSG) {
+    struct mg_http_message *hm = (struct mg_http_message *) ev_data;
+    printf("got data:%.*s\n", (int) hm->message.len, hm->message.ptr);
 
-	std::string url = std::string(http_req->uri.p, http_req->uri.len);
-	std::string body = std::string(http_req->body.p, http_req->body.len);
-	auto it = s_handler_map.find(url);
-	if (it != s_handler_map.end())
-	{
-		ReqHandler handle_func = it->second;
-		handle_func(url, body, connection, &HttpServer::SendHttpRsp);
-	}
-
-	// default route
-	if (route_check(http_req, "/")) // index page
-		mg_serve_http(connection, http_req, s_server_option);
-	else if (route_check(http_req, "/api/checkalive"))
-	{
-		SendHttpRsp(connection, "\"alive\"");
-	}
-	else if (route_check(http_req, "/api/sum"))
-	{
-		char n1[100], n2[100];
-		double result;
-
-		/* Get form variables */
-		mg_get_http_var(&http_req->body, "n1", n1, sizeof(n1));
-		mg_get_http_var(&http_req->body, "n2", n2, sizeof(n2));
-
-		/* Compute the result and send it back as a JSON object */
-		result = strtod(n1, NULL) + strtod(n2, NULL);
-		SendHttpRsp(connection, std::to_string(result));
-	}
-	else
-	{
-		mg_printf(
-			connection,
-			"%s",
-			"HTTP/1.1 501 Not Implemented\r\n"
-			"Content-Length: 0\r\n\r\n");
-	}
-}
-
-// ---- websocket ---- //
-int HttpServer::isWebsocket(const mg_connection *connection)
-{
-	return connection->flags & MG_F_IS_WEBSOCKET;
-}
-
-void HttpServer::HandleWebsocketMessage(mg_connection *connection, int event_type, websocket_message *ws_msg)
-{
-	if (event_type == MG_EV_WEBSOCKET_HANDSHAKE_DONE)
-	{
-		printf("client websocket connected\n");
-		// get client ip and port
-		char addr[32];
-		mg_sock_addr_to_str(&connection->sa, addr, sizeof(addr), MG_SOCK_STRINGIFY_IP | MG_SOCK_STRINGIFY_PORT);
-		printf("client addr: %s\n", addr);
-
-		// add session
-		s_websocket_session_set.insert(connection);
-
-		SendWebsocketMsg(connection, "client websocket connected");
-	}
-	else if (event_type == MG_EV_WEBSOCKET_FRAME)
-	{
-		mg_str received_msg = {(char *)ws_msg->data, ws_msg->size};
-
-		char buff[1024] = {0};
-		strncpy(buff, received_msg.p, received_msg.len); // must use strncpy, specifiy memory pointer and length
-
-		// do sth to process request
-		printf("received msg: %s\n", buff);
-		SendWebsocketMsg(connection, "send your msg back: " + std::string(buff));
-		// BroadcastWebsocketMsg("broadcast msg: " + std::string(buff));
-	}
-	else if (event_type == MG_EV_CLOSE)
-	{
-		if (isWebsocket(connection))
-		{
-			printf("client websocket closed\n");
-			// rm session
-			if (s_websocket_session_set.find(connection) != s_websocket_session_set.end())
-				s_websocket_session_set.erase(connection);
-		}
-	}
-}
-
-void HttpServer::SendWebsocketMsg(mg_connection *connection, std::string msg)
-{
-	mg_send_websocket_frame(connection, WEBSOCKET_OP_TEXT, msg.c_str(), strlen(msg.c_str()));
-}
-
-void HttpServer::BroadcastWebsocketMsg(std::string msg)
-{
-	for (mg_connection *connection : s_websocket_session_set)
-		mg_send_websocket_frame(connection, WEBSOCKET_OP_TEXT, msg.c_str(), strlen(msg.c_str()));
-}
-
-bool HttpServer::Close()
-{
-	mg_mgr_free(&m_mgr);
-	return true;
+    c3->is_closing = 1;        // Tell mongoose to close this connection
+    *(bool *) fn_data = true;  // Tell event loop to stop
+  } else if (ev == MG_EV_CLOSE) {
+    c3->is_closing = 1;        // Tell mongoose to close this connection
+    *(bool *) fn_data = true;  // Tell event loop to stop
+  } else if (ev == MG_EV_ERROR) {
+    *(bool *) fn_data = true;  // Error, tell event loop to stop
+  }
 }

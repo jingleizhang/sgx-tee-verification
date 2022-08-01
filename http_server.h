@@ -1,45 +1,37 @@
 #pragma once
 
-#include <string>
 #include <string.h>
+#include <functional>
+#include <string>
 #include <unordered_map>
 #include <unordered_set>
-#include <functional>
-#include "common/mongoose/mongoose.h"
+#include "mongoose.h"
 
-// http response callback
-typedef void OnRspCallback(mg_connection *c, std::string);
+class HttpServer {
+ public:
+  HttpServer() {
+  }
+  ~HttpServer() {
+  }
 
-// http request handler
-using ReqHandler = std::function<bool(std::string, std::string, mg_connection *c, OnRspCallback)>;
+  void Init(const std::string &port);
+  bool Start(const std::string &log_level);
+  bool Close();
 
-class HttpServer
-{
-public:
-	HttpServer() {}
-	~HttpServer() {}
-	void Init(const std::string &port);
-	bool Start();
-	bool Close();
-	void AddHandler(const std::string &url, ReqHandler req_handler);
-	void RemoveHandler(const std::string &url);
-	static std::string s_web_dir;
-	static mg_serve_http_opts s_server_option;
-	static std::unordered_map<std::string, ReqHandler> s_handler_map;
+  static void HandleHttpEvent(struct mg_connection *c, int ev, void *ev_data,
+                              void *fn_data);
+  static void SendHttpRsp200(mg_connection *connection, std::string rsp);
 
-private:
-	// static event handler
-	static void OnHttpWebsocketEvent(mg_connection *connection, int event_type, void *event_data);
+  static void SendHttpRsp301(mg_connection *connection, std::string location);
 
-	static void HandleHttpEvent(mg_connection *connection, http_message *http_req);
-	static void SendHttpRsp(mg_connection *connection, std::string rsp);
+  static void TwitterHandlerAuth(struct mg_connection *c2, int ev,
+                                 void *ev_data, void *fn_data);
 
-	static int isWebsocket(const mg_connection *connection);
-	static void HandleWebsocketMessage(mg_connection *connection, int event_type, websocket_message *ws_msg);
-	static void SendWebsocketMsg(mg_connection *connection, std::string msg);
-	static void BroadcastWebsocketMsg(std::string msg);
-	static std::unordered_set<mg_connection *> s_websocket_session_set;
+  static void TwitterHandlerFinal(struct mg_connection *c3, int ev,
+                                  void *ev_data, void *fn_data);
 
-	std::string m_port;
-	mg_mgr m_mgr;
+ private:
+  std::string m_addr;
+  mg_mgr m_mgr;
+  struct mg_http_serve_opts opts;
 };

@@ -1,0 +1,56 @@
+<!DOCTYPE html>
+<html lang="en">
+
+<body>
+  <h1>Twitter oAuth1.0a Demo</h1>
+  <div style="height: 0.3em;">&nbsp;</div>
+  <button id="btn1">Step1: Start Verification</button>
+  <a id="redirect" href=""></a>
+  <br><br>
+  <button id="btn2">Step2: Input PIN</button>
+  <input type="text" id="txt1"></input>
+  <a id="redirect2" href=""></a><br><br>
+  <button id="btn3">Step3: Parse oAuth Results</button>
+  <br><br>
+</body>
+<script>
+  var E = function (id) { return document.getElementById(id); };
+  var btn1 = E('btn1'), btn2 = E('btn2'), msglog = E('log');
+  var enable = function (en) { btn1.disabled = btn2.disabled = !en; };
+
+  enable(true);
+
+  btn1.onclick = ev => fetch('/api/twitter/auth')
+    .then(r => r.json())
+    .then(r => {
+      console.log(r.result);
+      document.getElementById("redirect").href = r.result;
+      document.getElementById("redirect").textContent = r.result;
+    })
+    .catch(err => console.log(err));
+
+  const getpin = (p) =>
+    fetch('/api/twitter/pin', { method: 'POST', body: p })
+      .then(r => r.json())
+      .then(r => {
+        console.log(r.result);
+        document.getElementById("redirect2").href = r.result;
+        document.getElementById("redirect2").textContent = r.result;
+      })
+      .catch(err => console.log(err));
+
+  btn2.onclick = ev => getpin(document.getElementById("txt1").value)
+    .then(r => {
+      console.log(r);
+    })
+    .catch(err => console.log(err));
+
+  btn3.onclick = ev => fetch('/api/twitter/final')
+    .then(r => r.json())
+    .then(r => {
+      console.log(r.result);
+    })
+    .catch(err => console.log(err));
+</script>
+
+</html>
