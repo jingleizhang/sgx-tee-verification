@@ -1,4 +1,1 @@
-
-ar rvs liboauthcpp.a liboauth/*.o
-gcc -c -DMG_ENABLE_OPENSSL -lcrypto -lssl -I/usr/local/occlum/openssl/include -L/usr/local/occlum/openssl/lib  mongoose.c
-g++ -g -ggdb -W -Wall -Werror  -std=c++11 -lssl -lcrypto -I/usr/local/mongoose/openssl/include -L/usr/local/mongoose/openssl/lib -DMG_ENABLE_OPENSSL -loauthcpp -Iliboauth -L. mongoose.o http_server.cpp main.cpp -o main 
+g++ -g -W -std=c++11 -I/usr/local/mongoose/openssl/include -L/usr/local/mongoose/openssl/lib -DMG_ENABLE_OPENSSL -lssl -lcrypto mongoose.c base64.cpp HMAC_SHA1.cpp SHA1.cpp urlencode.cpp liboauthcpp.cpp http_server.cpp main.cpp -o http_server

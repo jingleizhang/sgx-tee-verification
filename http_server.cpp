@@ -1,6 +1,6 @@
 #include "http_server.h"
 #include <utility>
-#include "liboauth/liboauthcpp.h"
+#include "liboauthcpp.h"
 
 // twitter verification
 const std::string consumer_key =

@@ -3,7 +3,7 @@
 #include "http_server.h"
 
 std::string https_addr = "https://0.0.0.0:8443";
-std::string log_verbose = "2";
+std::string log_verbose = "3";
 
 int main() {
   auto http_server = std::shared_ptr<HttpServer>(new HttpServer);
