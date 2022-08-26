@@ -225,7 +225,7 @@ namespace SendGrid
             if (personalizations)
             {
                 oJson.AddEmptySubArray("personalizations");
-                for (int i = 0; i < personalizations->size(); i++)
+                for (size_t i = 0; i < personalizations->size(); i++)
                 {
                     oJson["personalizations"].Add((*personalizations)[i].toJson());
                 }

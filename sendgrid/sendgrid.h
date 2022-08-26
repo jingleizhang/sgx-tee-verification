@@ -250,7 +250,7 @@ namespace SendGrid
             if (!to.empty())
             {
                 obj.AddEmptySubArray("to");
-                for (int i = 0; i < to.size(); i++)
+                for (size_t i = 0; i < to.size(); i++)
                 {
                     obj["to"].Add(to[i].toJson());
                 }
@@ -259,7 +259,7 @@ namespace SendGrid
             if (!cc.empty())
             {
                 obj.AddEmptySubArray("cc");
-                for (int i = 0; i < cc.size(); i++)
+                for (size_t i = 0; i < cc.size(); i++)
                 {
                     obj["cc"].Add(cc[i].toJson());
                 }
@@ -268,7 +268,7 @@ namespace SendGrid
             if (!bcc.empty())
             {
                 obj.AddEmptySubArray("bcc");
-                for (int i = 0; i < bcc.size(); i++)
+                for (size_t i = 0; i < bcc.size(); i++)
                 {
                     obj["bcc"].Add(bcc[i].toJson());
                 }

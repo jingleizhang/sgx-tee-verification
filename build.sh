@@ -1,1 +1,1 @@
-g++ -g -W -std=c++11 -I/usr/local/mongoose/openssl/include -L/usr/local/mongoose/openssl/lib -DMG_ENABLE_OPENSSL -lssl -lcrypto mongoose.c base64.cpp HMAC_SHA1.cpp SHA1.cpp urlencode.cpp liboauthcpp.cpp http_server.cpp main.cpp -o http_server
+g++ -g -W -std=c++11 -I/usr/local/mongoose/openssl/include -I./sendgrid -L/usr/local/mongoose/openssl/lib -DMG_ENABLE_OPENSSL -lssl -lcrypto sendgrid/cJSON.o sendgrid/CJsonObject.o sendgrid/sendgridmsg.o mongoose.c base64.cpp HMAC_SHA1.cpp SHA1.cpp urlencode.cpp liboauthcpp.cpp http_server.cpp main.cpp -o http_server
